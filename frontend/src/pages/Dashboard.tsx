@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { coinSymbolToId } from '../utils/coinMapper';
 import CoinModal from '../components/CoinModal';
+import { useNavigate } from 'react-router-dom';
 
 type SummarySection = {
   overexposed: { coin: string; percent: string; reason: string }[];
@@ -9,7 +10,6 @@ type SummarySection = {
   rotationMoves: string[];
   strategicTake: string;
 };
-
 
 type Holding = {
   coin: string;
@@ -30,20 +30,27 @@ export default function Dashboard() {
   const [showSummary, setShowSummary] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
-  const userId = 'medha123';
-
+  const navigate = useNavigate();
+  
   useEffect(() => {
-    const fetchPortfolio = async () => {
-      try {
-        const res = await axios.get(`http://localhost:5000/api/portfolio/user/${userId}`);
-        setHoldings(res.data.holdings);
-      } catch (err) {
-        console.error('Failed to fetch holdings:', err);
+  const fetchPortfolio = async () => {
+    try {
+      // 🔐 Set token from localStorage
+      const token = localStorage.getItem('bullrush_token');
+      if (token) {
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       }
-    };
 
-    fetchPortfolio();
-  }, []);
+      const res = await axios.get('http://localhost:5000/api/portfolio/user');
+      setHoldings(res.data.holdings);
+    } catch (err) {
+      console.error('Failed to fetch holdings:', err);
+    }
+  };
+
+  fetchPortfolio();
+}, []);
+
 
   useEffect(() => {
     const fetchPrices = async () => {
@@ -90,11 +97,11 @@ export default function Dashboard() {
         priceMap[h.coin.toUpperCase()] = prices[id]?.usd ?? 0;
       }
 
-    const res = await axios.post('http://localhost:5000/api/ai/analysis/portfolio', {
-    portfolio: portfolioData,
-    priceMap
-    });
-    setPortfolioSummary(res.data.summary);
+      const res = await axios.post('http://localhost:5000/api/ai/analysis/portfolio', {
+        portfolio: portfolioData,
+        priceMap
+      });
+      setPortfolioSummary(res.data.summary);
 
     } catch (err) {
       console.error('Failed to fetch portfolio summary:', err);
@@ -118,7 +125,15 @@ export default function Dashboard() {
       {loading && <p>Loading portfolio...</p>}
 
       {!loading && holdings.length === 0 && (
-        <p className="text-yellow-300">No holdings found. Go import them!</p>
+        <div className="flex flex-col items-center justify-center mt-10">
+          <p className="text-yellow-300 mb-4">No holdings found.</p>
+          <button
+            onClick={() => navigate('/')}
+            className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-semibold"
+          >
+            Go Import Them
+          </button>
+        </div>
       )}
 
       {!loading && holdings.length > 0 && (
@@ -126,6 +141,7 @@ export default function Dashboard() {
           <h2 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-green-300 to-cyan-400 mb-4">
             Your Portfolio
           </h2>
+
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             {holdings.map(({ coin, amount }) => {
@@ -151,7 +167,17 @@ export default function Dashboard() {
               );
             })}
           </div>
-                </div>
+
+
+          <div className="flex justify-center gap-4 mt-6">
+            <button
+                onClick={() => navigate('/')}
+                className="bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-500 hover:to-blue-600 text-white px-5 py-2 rounded-xl font-medium shadow-md"
+            >
+                + Add Coin
+            </button>
+          </div>
+        </div>
       )}
 
       {!loading && holdings.length > 0 && (

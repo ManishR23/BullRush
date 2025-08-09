@@ -7,7 +7,7 @@ import portfolioRoutes from './routes/portfolio.js'
 import aiRoutes from './routes/ai.js'
 import pricesRoute from './routes/prices.js';
 import newsRoutes from './routes/news.js';
-
+import authRoutes from './routes/auth.js'
 
 
 dotenv.config()
@@ -20,7 +20,7 @@ app.use('/api/portfolio', portfolioRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api', pricesRoute);
 app.use('/api/news', newsRoutes);
-
+app.use('/api/auth', authRoutes)
 
 
 const PORT = process.env.PORT || 5000

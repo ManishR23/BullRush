@@ -31,7 +31,6 @@ export default function ImportPortfolio() {
         .map(h => ({ coin: h.coin, amount: parseFloat(h.amount) }));
 
       const res = await axios.post('http://localhost:5000/api/portfolio', {
-        userId: 'medha123',
         holdings: filteredHoldings,
       });
 

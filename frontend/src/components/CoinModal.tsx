@@ -52,7 +52,6 @@ export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinMod
   const [aiRotation, setAiRotation] = useState<{ to: string; amount: number; why: string }[]>([]);
   const [aiUrgency, setAiUrgency] = useState('');
   const [percentChanges, setPercentChanges] = useState<Record<string, number | undefined>>({});
-  const [newsItems, setNewsItems] = useState<{ title: string; url: string; published_at: string; source: string }[]>([]);
 
   const timeAgo = (dateString: string) => {
     const diff = (Date.now() - new Date(dateString).getTime()) / 1000;
@@ -83,9 +82,6 @@ export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinMod
         const res = await getCached(coinUrl);
         setData(res);
 
-        const newsUrl = `http://localhost:5000/api/news/${symbol}`;
-        const newsRes = await getCached(newsUrl);
-        setNewsItems(newsRes.articles);
       } catch (err) {
         console.error('Detail/news fetch error:', err);
       } finally {
@@ -246,23 +242,6 @@ export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinMod
               </ResponsiveContainer>
             </div>
 
-            {newsItems.length > 0 && (
-              <div className="mt-6">
-                <h3 className="text-lg font-semibold mb-2">🔥 Latest News</h3>
-                <ul className="space-y-3 text-sm text-blue-400">
-                  {newsItems.slice(0, 6).map((item, idx) => (
-                    <li key={idx}>
-                      <a href={item.url} target="_blank" rel="noopener noreferrer" className="font-medium hover:underline">
-                        {item.title}
-                      </a>
-                      <div className="text-gray-400 text-xs">
-                        {item.source ? `${item.source} — ` : ''}{timeAgo(item.published_at)}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </>
         ) : (
           <p>Failed to load coin data.</p>
