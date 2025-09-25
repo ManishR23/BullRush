@@ -6,14 +6,14 @@ const router = express.Router();
 
 // POST /api/auth/signup
 router.post('/signup', async (req, res) => {
-  console.log('📩 Hit /signup route with body:', req.body);
+  console.log('Hit /signup route with body:', req.body);
 
   const { email, password } = req.body;
 
   try {
     const existing = await User.findOne({ email });
     if (existing) {
-      console.log('⚠️ Signup attempt with existing email');
+      console.log('Signup attempt with existing email');
       return res.status(400).json({ error: 'User already exists' });
     }
 
@@ -31,7 +31,7 @@ router.post('/signup', async (req, res) => {
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
-  console.log('🔐 Hit /login route with body:', req.body);
+  console.log('Hit /login route with body:', req.body);
 
   const { email, password } = req.body;
 

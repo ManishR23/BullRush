@@ -4,7 +4,7 @@ import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// 🔄 POST /api/portfolio → Save or update user's portfolio
+// 🔄 POST /api/portfolio → Save or update user's portfolio (merge-add)
 router.post('/', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -51,8 +51,62 @@ router.post('/', authenticate, async (req, res) => {
   }
 });
 
+// PATCH /api/portfolio/holdings
+router.patch('/holdings', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { coin, amount } = req.body;
 
-// 📥 GET /api/portfolio/user → Fetch current user's portfolio
+    if (!coin || typeof amount !== 'number') {
+      return res.status(400).json({ error: 'coin and numeric amount are required' });
+    }
+
+    const sym = String(coin).toUpperCase();
+
+    const pf = await Portfolio.findOne({ userId });
+    if (!pf) {
+      if (amount <= 0) return res.status(200).json({ holdings: [] });
+      const created = await Portfolio.create({ userId, holdings: [{ coin: sym, amount }] });
+      return res.json(created);
+    }
+
+    if (amount <= 0) {
+      pf.holdings = (pf.holdings || []).filter(h => String(h.coin).toUpperCase() !== sym);
+    } else {
+      const idx = (pf.holdings || []).findIndex(h => String(h.coin).toUpperCase() === sym);
+      if (idx >= 0) pf.holdings[idx].amount = amount;
+      else pf.holdings.push({ coin: sym, amount });
+    }
+
+    await pf.save();
+    return res.json({ holdings: pf.holdings });
+  } catch (err) {
+    console.error('Patch holding error:', err);
+    res.status(500).json({ error: 'Failed to update holding.' });
+  }
+});
+
+// DELETE /api/portfolio/holdings/:coin → Remove one coin
+router.delete('/holdings/:coin', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const sym = String(req.params.coin || '').toUpperCase();
+
+    const updated = await Portfolio.findOneAndUpdate(
+      { userId },
+      { $pull: { holdings: { coin: sym } } },
+      { new: true }
+    );
+
+    if (!updated) return res.status(404).json({ error: 'portfolio not found' });
+    res.json({ holdings: updated.holdings });
+  } catch (err) {
+    console.error('Delete holding error:', err);
+    res.status(500).json({ error: 'Failed to delete holding.' });
+  }
+});
+
+// GET /api/portfolio/user → Fetch current user's portfolio
 router.get('/user', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;

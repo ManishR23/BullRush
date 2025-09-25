@@ -29,18 +29,115 @@ const chartRanges = [
   { label: '1y', days: '365' },
 ];
 
-// In-memory cache
-const cache: Record<string, { data: any; timestamp: number }> = {};
+/** =======================
+ *  Caching + Throttling
+ *  ======================= */
+type CacheEntry = { data: any; t: number; ttl: number };
 
-async function getCached(url: string, ttl = 5 * 60 * 1000) {
-  const cached = cache[url];
-  if (cached && Date.now() - cached.timestamp < ttl) {
-    return cached.data;
-  }
-  const res = await axios.get(url);
-  cache[url] = { data: res.data, timestamp: Date.now() };
-  return res.data;
+// in-memory cache
+const mem = new Map<string, CacheEntry>();
+// in-flight requests (dedupe)
+const inflight = new Map<string, Promise<any>>();
+// crude per-host throttle
+let lastCallTs = 0;
+const MIN_SPACING_MS = 900; // ~1 req/sec to be nice to CG
+
+function sleep(ms: number) {
+  return new Promise(res => setTimeout(res, ms));
 }
+
+async function throttle() {
+  const now = Date.now();
+  const delta = now - lastCallTs;
+  if (delta < MIN_SPACING_MS) {
+    await sleep(MIN_SPACING_MS - delta);
+  }
+  lastCallTs = Date.now();
+}
+
+function lsKey(url: string) {
+  return `cg:${url}`;
+}
+
+function readLS(url: string): CacheEntry | undefined {
+  try {
+    const raw = localStorage.getItem(lsKey(url));
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return;
+    return parsed;
+  } catch { return; }
+}
+
+function writeLS(url: string, entry: CacheEntry) {
+  try {
+    localStorage.setItem(lsKey(url), JSON.stringify(entry));
+  } catch { /* ignore quota errors */ }
+}
+
+function getFresh(entry?: CacheEntry) {
+  if (!entry) return false;
+  return Date.now() - entry.t < entry.ttl;
+}
+
+async function fetchWithBackoff(url: string, tries = 3, baseDelay = 800) {
+  let attempt = 0;
+  while (attempt < tries) {
+    try {
+      await throttle();
+      const res = await axios.get(url);
+      return res.data;
+    } catch (err: any) {
+      const status = err?.response?.status;
+      attempt += 1;
+      if (attempt >= tries) throw err;
+      // Retry on 429, 5xx, or network errors
+      if (!status || status === 429 || (status >= 500 && status < 600)) {
+        const delay = Math.round(baseDelay * Math.pow(1.8, attempt - 1));
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
+  // unreachable
+}
+
+async function getCached(url: string, ttlMs: number) {
+  // 1) fresh in-memory?
+  const memHit = mem.get(url);
+  if (getFresh(memHit)) return memHit!.data;
+
+  // 2) fresh localStorage?
+  const lsHit = readLS(url);
+  if (getFresh(lsHit)) {
+    // promote to memory
+    mem.set(url, lsHit!);
+    return lsHit!.data;
+  }
+
+  // 3) dedupe concurrent fetches
+  if (inflight.has(url)) return inflight.get(url)!;
+
+  const p = (async () => {
+    const data = await fetchWithBackoff(url);
+    const entry: CacheEntry = { data, t: Date.now(), ttl: ttlMs };
+    mem.set(url, entry);
+    writeLS(url, entry);
+    inflight.delete(url);
+    return data;
+  })();
+
+  inflight.set(url, p);
+  return p;
+}
+
+/** TTLs tuned to reduce 429s without feeling stale */
+const TTL = {
+  details: 12 * 60 * 60 * 1000, // 12h
+  chart:   6  * 60 * 60 * 1000, // 6h
+  price:   2  * 60 * 1000,      // 2m
+};
 
 export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinModalProps) {
   const [data, setData] = useState<any>(null);
@@ -53,18 +150,10 @@ export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinMod
   const [aiUrgency, setAiUrgency] = useState('');
   const [percentChanges, setPercentChanges] = useState<Record<string, number | undefined>>({});
 
-  const timeAgo = (dateString: string) => {
-    const diff = (Date.now() - new Date(dateString).getTime()) / 1000;
-    if (diff < 60) return `${Math.floor(diff)}s ago`;
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
-  };
-
   const fetchChart = async (days: string) => {
     try {
       const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=${days}`;
-      const res = await getCached(url);
+      const res = await getCached(url, TTL.chart);
       const formatted = res.prices.map((p: number[]) => ({
         time: new Date(p[0]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         price: p[1],
@@ -76,23 +165,25 @@ export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinMod
   };
 
   useEffect(() => {
-    const fetchDetails = async () => {
+    let alive = true;
+    (async () => {
       try {
         const coinUrl = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false`;
-        const res = await getCached(coinUrl);
+        const res = await getCached(coinUrl, TTL.details);
+        if (!alive) return;
         setData(res);
-
       } catch (err) {
-        console.error('Detail/news fetch error:', err);
+        console.error('Detail fetch error:', err);
       } finally {
-        setLoading(false);
+        if (alive) setLoading(false);
       }
-    };
-    fetchDetails();
+    })();
+    return () => { alive = false; };
   }, [coinId, symbol]);
 
   useEffect(() => {
     fetchChart(activeRange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRange, coinId]);
 
   useEffect(() => {
@@ -109,17 +200,17 @@ export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinMod
       };
       setPercentChanges(pctChanges);
 
-      const coinIds = holdings.map(h => coinSymbolToId[h.coin.toUpperCase()]).join(',');
-      const priceUrl = `https://api.coingecko.com/api/v3/simple/price?ids=${coinIds}&vs_currencies=usd`;
-      const priceMap = await getCached(priceUrl);
+      // price map for entire portfolio (dedup ids)
+      const ids = Array.from(new Set(holdings.map(h => coinSymbolToId[h.coin.toUpperCase()]).filter(Boolean)));
+      if (ids.length === 0) return;
+
+      const priceUrl = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=usd`;
+      const priceMap = await getCached(priceUrl, TTL.price);
 
       const fullPortfolio = holdings.map((h) => {
         const id = coinSymbolToId[h.coin.toUpperCase()];
         const price = priceMap[id]?.usd || 0;
-        return {
-          coin: h.coin,
-          amount: +(h.amount * price).toFixed(2),
-        };
+        return { coin: h.coin, amount: +(h.amount * price).toFixed(2) };
       });
 
       try {
@@ -128,7 +219,6 @@ export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinMod
           percentChanges: pctChanges,
           portfolio: fullPortfolio,
         });
-
         setAiSentiment(res.data.sentiment);
         setAiReason(res.data.reason);
         setAiRotation(res.data.rotationSuggestion || []);
@@ -139,6 +229,7 @@ export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinMod
     };
 
     fetchSentiment();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, holdings, symbol]);
 
   const renderPercent = (label: string, value?: number) => {
@@ -196,7 +287,7 @@ export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinMod
             {aiRotation.length > 0 && (
               <div className="mt-4 text-sm text-amber-400 border-l-4 border-yellow-500 pl-3">
                 🔄 {['Strong Buy', 'Buy', 'Hold-Buy'].includes(aiSentiment)
-                  ? 'Rotation (if leaning into Phase 3 risk):'
+                  ? 'Rotation (toward Phase-2 targets):'
                   : 'Rotation Suggestions:'}
                 <ul className="list-disc ml-5 mt-1">
                   {aiRotation.map((r, idx) => (
@@ -250,4 +341,3 @@ export default function CoinModal({ symbol, coinId, holdings, onClose }: CoinMod
     </div>
   );
 }
-
